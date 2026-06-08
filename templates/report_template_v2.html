@@ -1,0 +1,160 @@
+<html>
+    <head>
+		<meta charset="UTF-8">
+		<title>CWCAP Salmon Survey Report</title>
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/4.6.0/css/bootstrap.min.css">
+		<style>
+		  body {
+			font-family: Arial, Helvetica, sans-serif;
+			margin: 0;
+			padding: 0;
+		  }
+		  
+		  .container {
+			max-width: 1200px;
+			margin: 0 auto;
+			padding: 20px;
+		  }
+		  
+		  h1 {
+			font-size: 36px;
+			margin-bottom: 20px;
+		  }
+		  
+		  img {
+		  	width: 100%;
+			max-width: 100%;
+			height: auto;
+		  }
+		  
+		  table {
+			width: 100%;
+			margin-bottom: 20px;
+			border-collapse: collapse;
+		  }
+		  
+		  th, td {
+			padding: 8px;
+			text-align: center;
+			border: 1px solid #ddd;
+		  }
+		  
+		  th {
+			background-color: #15331c;
+			color: white;
+		  }
+		  
+		  tr:nth-child(even) {
+			background-color: #f2f2f2;
+		  }
+		  
+		  caption {
+			text-align: left;
+			margin-bottom: 20px;
+		  }
+		  
+		  .plotly-graph-div {
+			width: 100%;
+			max-width: 100%;
+			height: auto;
+		  }
+
+          .bottom-spacing {
+            margin-bottom: 10px;
+          }
+
+		  .chart-full { width: 100%; }
+		  .chart-full > div, .chart-full iframe { width: 100% !important; height: 620px; }
+		  @media (max-width: 700px) {
+		    .chart-full > div, .chart-full iframe { height: 420px; }
+		  }
+
+		  @media print {
+			.col-md-6 {
+			  float: left;
+			  width: 50%;
+		    }
+			a {
+		      color: black;
+			  text-decoration: none;
+			}
+}
+		</style>
+	</head>
+    <body>
+		<div class="container">
+			<header class="row">
+				<div class="col-md-8">
+					<h1>Salmon Survey Report</h1>
+					<h4>Carkeek Watershed Community Action Project</h4>
+					<a href="https://www.carkeekwatershed.org">carkeekwatershed.org</a>
+				</div>
+				<div class="col-md-4 text-right">
+					<img class="d-print-none" src="https://www.carkeekwatershed.org/wp-content/uploads/CWCAPlogo-1.png" alt="CWCAP Logo">
+				</div>
+			</header>
+			<h6>generated {{reportGenTime}}</h6>
+			{% if surveyStatsTable is not none %}  
+				<div style="overflow-x:auto;">
+					{{surveyStatsTable}}
+				</div>
+			{% endif %}
+			{% if maxSurveyChum is not none %}
+				<table>
+					<tr>
+						<th>Yearly Chum Total</th>
+						<th>Chum Calc Date</th>
+						<th>Yearly Coho Total</th>
+						<th>Coho Calc Date</th>
+					</tr>
+					<tr>
+						<td>{{maxSurveyChum}}</td>
+						<td>{{maxSurveyChumDate}}</td>
+						<td>{{maxSurveyCoho}}</td>
+						<td>{{maxSurveyCohoDate}}</td>
+					</tr>
+				</table>
+				<caption>Note: yearly total = live fish + running total of dead fish. Highest total is usually but not always on the most recent survey date</caption>
+			{% endif %}
+			{% if reddsTable is not none %}   
+				<div style="overflow-x:auto;">
+					{{reddsTable}}
+				</div>
+			{% endif %}
+			<div class="row">
+				<div class="col-md-6 plotly-graph-div">
+					{% if countPlotByYear is not none %}
+						{{countPlotByYear}}
+					{% endif %}
+				</div>
+				<div class="col-md-6 plotly-graph-div">
+					{% if yearByYearCountPlot is not none %}  
+						{{yearByYearCountPlot}}
+					{% endif %}
+				</div>
+			</div>
+			<div class="row plotly-graph-div">
+				{% if latestScatterMap is not none %}  
+					<div class="chart-full">{{latestScatterMap}}</div>
+				{% endif %}
+			</div>
+			<div class="row plotly-graph-div">
+				{% if scatterMapByYear is not none %}
+					<div class="chart-full">{{scatterMapByYear}}</div>
+				{% endif %}
+			</div>
+			{% if scatterMapByYear is not none or latestScatterMap is not none%}  
+				<p><span class = "d-print-none">These scatter plots are interactive. </span>Locations are approximate and based on where the data recorder is standing. Not all entries will have location set</p>
+			{% endif %}
+			<div class="row plotly-graph-div bottom-spacing">
+				{% if spawningChartsByYear is not none %}
+					<div class="chart-full">{{spawningChartsByYear}}</div>
+				{% endif %}
+			</div>
+			<div class="row plotly-graph-div">
+				{% if predationChartsByYear is not none %}
+					<div class="chart-full">{{predationChartsByYear}}</div>
+				{% endif %}
+			</div>
+	</body>
+</html>
