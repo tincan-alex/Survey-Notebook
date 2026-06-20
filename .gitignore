@@ -1,2 +1,5 @@
 /.ipynb_checkpoints
 *salmonReport.html
+*.db
+**/__pycache__
+**/__pycache__/*
