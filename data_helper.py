@@ -3,6 +3,7 @@ from pathlib import Path
 import sqlite3
 import requests
 from sqlite3 import Connection
+import tempfile
 import time
 
 import pandas as pd
@@ -69,44 +70,98 @@ class DataHelper:
     def __init__(
         self,
         surveyYear: int,
-        allYears: list[int] = SALMON_URIS.keys(),
+        allYears: list[int] = None,
         aboveDamOnly=False,
         inCollab=False,
+        use_compiled_db=False,
     ):
         self.additionalFilterForAboveDam = (
             "AND CAST(Distance AS int) > 310" if aboveDamOnly else ""
         )
-        self.surveyYear = surveyYear
-        self.allYears = allYears
+        self.additionalFilterForAboveDamV2 = (
+            "AND CAST(distance AS int) > 310" if aboveDamOnly else ""
+        )
+        self.surveyYear = self._normalize_year_value(surveyYear)
+        self.allYears = [
+            self._normalize_year_value(year)
+            for year in (allYears or SALMON_URIS.keys())
+            if self._normalize_year_value(year) is not None
+        ]
         self.inCollab = inCollab
+        self.use_compiled_db = use_compiled_db
+        self.survey_data_table = "survey_data" if self.use_compiled_db else "salmon"
+        self._available_years_cache = None
+
+    def getData(self):
+        if self.use_compiled_db:
+            self.getDataV2()
+        else:
+            self.getDataV1()
+
+    def getDataV1(self):
+        self._available_years_cache = None
+        self.createTableV1()
+        for year in SALMON_URIS:
+            self._loadSurveyYear(year)
+        self._memoize_available_years()
+
+    def getDataV2(self):
+        self._available_years_cache = None
+        self.use_compiled_db = True
+        url = "https://raw.githubusercontent.com/tincan-alex/salmon_data_snapshot/main/survey_data.db"
+        response = requests.get(url, timeout=60)
+        response.raise_for_status()
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as handle:
+            handle.write(response.content)
+            db_path = Path(handle.name)
+        self.connection = sqlite3.connect(db_path)
+        self._memoize_available_years()
 
     def createTableV1(self):
         self.connection = sqlite3.connect(":memory:")
         self.connection.execute(SALMON_TABLE_CREATE_QUERY)
 
-    def getSurveyStatsV1(self, year):
+    def getSurveyStats(self, year):
+        year_value = int(year)
+        salmon_count_selects = """
+            DATE(survey_date) AS Survey_Date,
+            COALESCE(SUM(CASE WHEN species IN ('Chum', 'Coho', 'Unknown', 'Sea-run Cutthroat') AND survey_type IN ('Dead', 'Remnant') THEN quantity END), 0) AS total_dead_salmon_count,
+            COALESCE(SUM(CASE WHEN species IN ('Chum', 'Coho', 'Unknown', 'Sea-run Cutthroat') AND survey_type = 'Live' THEN quantity END), 0) AS total_live_salmon_count,
+            COALESCE(SUM(CASE WHEN species IN ('Chum', 'Coho', 'Unknown', 'Sea-run Cutthroat') AND survey_type IN ('Live', 'Dead', 'Remnant') THEN quantity END), 0) AS total_salmon_count,
+            COALESCE(SUM(CASE WHEN species = 'Chum' AND survey_type IN ('Dead', 'Remnant') THEN quantity END), 0) AS dead_chum_count,
+            COALESCE(SUM(CASE WHEN species = 'Chum' AND survey_type = 'Live' THEN quantity END), 0) AS live_chum_count,
+            COALESCE(SUM(CASE WHEN species = 'Coho' AND survey_type IN ('Dead', 'Remnant') THEN quantity END), 0) AS dead_coho_count,
+            COALESCE(SUM(CASE WHEN species = 'Coho' AND survey_type = 'Live' THEN quantity END), 0) AS live_coho_count,
+            COALESCE(SUM(CASE WHEN species IN ('Resident Cutthroat', 'Sea-run Cutthroat', 'Cutthroat') AND survey_type IN ('Dead', 'Remnant') THEN quantity END), 0) AS dead_cutthroat_count,
+            COALESCE(SUM(CASE WHEN species IN ('Resident Cutthroat', 'Sea-run Cutthroat', 'Cutthroat') AND survey_type = 'Live' THEN quantity END), 0) AS live_cutthroat_count,
+            COALESCE(SUM(CASE WHEN species = 'Unknown' AND survey_type IN ('Dead', 'Remnant') THEN quantity END), 0) AS dead_unknown_count,
+            COALESCE(SUM(CASE WHEN species = 'Unknown' AND survey_type = 'Live' THEN quantity END), 0) AS live_unknown_count,
+            COALESCE(SUM(CASE WHEN survey_type = 'Redd' THEN quantity END), 0) AS redd_count
+        """ if self.use_compiled_db else """
+            Survey_Date,
+            COALESCE(SUM(CASE WHEN Species in ('Chum', 'Coho', 'Unknown', 'Sea-run Cutthroat', 'Sea-run_Cutthroat') AND Type in ('Dead', 'Remnant') THEN Quantity END), 0) AS total_dead_salmon_count,
+            COALESCE(SUM(CASE WHEN Species in ('Chum', 'Coho', 'Unknown', 'Sea-run_Cutthroat', 'Sea-run Cutthroat') AND Type = 'Live' THEN Quantity END), 0) AS total_live_salmon_count,
+            COALESCE(SUM(CASE WHEN Species in ('Chum', 'Coho', 'Unknown', 'Sea-run_Cutthroat', 'Sea-run Cutthroat') AND Type in ('Live', 'Dead', 'Remnant') THEN Quantity END), 0) AS total_salmon_count,
+            COALESCE(SUM(CASE WHEN Species = 'Chum' AND Type in ('Dead', 'Remnant') THEN Quantity END), 0) AS dead_chum_count,
+            COALESCE(SUM(CASE WHEN Species = 'Chum' AND Type = 'Live' THEN Quantity END), 0) AS live_chum_count,
+            COALESCE(SUM(CASE WHEN Species = 'Coho' AND Type in ('Dead', 'Remnant') THEN Quantity END), 0) AS dead_coho_count,
+            COALESCE(SUM(CASE WHEN Species = 'Coho' AND Type = 'Live' THEN Quantity END), 0) AS live_coho_count,
+            COALESCE(SUM(CASE WHEN Species in ('Resident_Cutthroat', 'Sea-run_Cutthroat', 'Resident Cutthroat', 'Sea-run Cutthroat', 'Cutthroat') AND Type in ('Dead', 'Remnant') THEN Quantity END), 0) as dead_cutthroat_count,
+            COALESCE(SUM(CASE WHEN Species in ('Resident_Cutthroat', 'Sea-run_Cutthroat', 'Resident Cutthroat', 'Sea-run Cutthroat', 'Cutthroat') AND Type = 'Live' THEN Quantity END), 0) as live_cutthroat_count,
+            COALESCE(SUM(CASE WHEN Species = 'Unknown' AND Type in ('Dead', 'Remnant') THEN quantity END), 0) AS dead_unknown_count,
+            COALESCE(SUM(CASE WHEN Species = 'Unknown' AND Type = 'Live' THEN quantity END), 0) AS live_unknown_count,
+            COALESCE(SUM(CASE WHEN Type = 'Redd' THEN Quantity END), 0) as redd_count
+        """
         dead_to_date_query = f"""
         WITH salmon_counts AS (
             SELECT
-                Survey_Date,
-                COALESCE(SUM(CASE WHEN Species in ('Chum', 'Coho', 'Unknown', 'Sea-run Cutthroat', 'Sea-run_Cutthroat') AND Type in ('Dead', 'Remnant') THEN Quantity END), 0) AS total_dead_salmon_count,
-                COALESCE(SUM(CASE WHEN Species in ('Chum', 'Coho', 'Unknown', 'Sea-run_Cutthroat', 'Sea-run Cutthroat') AND Type = 'Live' THEN Quantity END), 0) AS total_live_salmon_count,
-                COALESCE(SUM(CASE WHEN Species in ('Chum', 'Coho', 'Unknown', 'Sea-run_Cutthroat', 'Sea-run Cutthroat') AND Type in ('Live', 'Dead', 'Remnant') THEN Quantity END), 0) AS total_salmon_count,
-                COALESCE(SUM(CASE WHEN Species = 'Chum' AND Type in ('Dead', 'Remnant') THEN Quantity END), 0) AS dead_chum_count,
-                COALESCE(SUM(CASE WHEN Species = 'Chum' AND Type = 'Live' THEN Quantity END), 0) AS live_chum_count,
-                COALESCE(SUM(CASE WHEN Species = 'Coho' AND Type in ('Dead', 'Remnant') THEN Quantity END), 0) AS dead_coho_count,
-                COALESCE(SUM(CASE WHEN Species = 'Coho' AND Type = 'Live' THEN Quantity END), 0) AS live_coho_count,
-                COALESCE(SUM(CASE WHEN Species in ('Resident_Cutthroat', 'Sea-run_Cutthroat', 'Resident Cutthroat', 'Sea-run Cutthroat', 'Cutthroat') AND Type in ('Dead', 'Remnant') THEN Quantity END), 0) as dead_cutthroat_count,
-                COALESCE(SUM(CASE WHEN Species in ('Resident_Cutthroat', 'Sea-run_Cutthroat', 'Resident Cutthroat', 'Sea-run Cutthroat', 'Cutthroat') AND Type = 'Live' THEN Quantity END), 0) as live_cutthroat_count,
-                COALESCE(SUM(CASE WHEN Species = 'Unknown' AND Type in ('Dead', 'Remnant') THEN quantity END), 0) AS dead_unknown_count,
-                COALESCE(SUM(CASE WHEN Species = 'Unknown' AND Type = 'Live' THEN quantity END), 0) AS live_unknown_count,
-                COALESCE(SUM(CASE WHEN Type = 'Redd' THEN Quantity END), 0) as redd_count
+                {salmon_count_selects}
             FROM
-                salmon
+                {self.survey_data_table}
             WHERE
-                year = {year} {self.additionalFilterForAboveDam}
+                year = ? {self.additionalFilterForAboveDamV2}
             GROUP BY
-                Survey_Date
+                DATE(survey_date)
         ), running_counts AS (
             SELECT
                 Survey_Date,
@@ -123,7 +178,7 @@ class DataHelper:
             FROM
                 salmon_counts
         )
-        SELECT        
+        SELECT
             sc.Survey_Date,
             sc.total_dead_salmon_count,
             sc.total_live_salmon_count,
@@ -149,20 +204,10 @@ class DataHelper:
             rc.running_total_all_salmon
         FROM
             salmon_counts sc
-        JOIN running_counts rc ON sc.Survey_Date = rc.Survey_Date;
+        JOIN running_counts rc ON sc.Survey_Date = rc.Survey_Date
+        ORDER BY sc.Survey_Date;
         """
-        return pd.read_sql(dead_to_date_query, self.connection)
-
-    def getDataV1(self):
-        self.createTableV1()
-        for year in SALMON_URIS:
-            self._loadSurveyYear(year)
-
-    def getDataV2(self):
-        url = "https://raw.githubusercontent.com/tincan-alex/salmon_data_snapshot/main/survey_data.db"
-        local_path = Path("survey_data.db")
-        local_path.write_bytes(requests.get(url).content)
-        self.connection = sqlite3.connect(local_path)
+        return pd.read_sql(dead_to_date_query, self.connection, params=[year_value])
 
     def getMaxSurveyTotal(self, df, columnName):
         max_row = df[columnName].values.argmax()
@@ -175,37 +220,122 @@ class DataHelper:
         return calcDate
 
     def getReddsTableData(self):
+        stream = "stream AS Stream" if self.use_compiled_db else "Stream"
+        distance = "distance AS Distance" if self.use_compiled_db else "Distance"
+        survey_date = "DATE(survey_date) AS Survey_Date" if self.use_compiled_db else "Survey_Date"
         redds_table_query = f"""
         SELECT
-            Stream, Distance, Survey_Date
+            {stream},
+            {distance},
+            {survey_date}
         FROM
-            salmon
-        WHERE Type = 'Redd' AND year = {self.surveyYear}
+            {self.survey_data_table}
+        WHERE {'survey_type' if self.use_compiled_db else 'Type'} = 'Redd' AND year = ?
         """
-        return self.getDataFrame(redds_table_query)
+        return self.getDataFrame(redds_table_query, params=[self.surveyYear])
 
     def getYearScatterMapData(self, year):
+        survey_date = "DATE(survey_date) AS Survey_Date" if self.use_compiled_db else "Survey_Date"
+        survey_type = "survey_type AS Type" if self.use_compiled_db else "Type"
+        species = "species AS Species" if self.use_compiled_db else "Species"
+        latitude = "latitude AS Latitude" if self.use_compiled_db else "Latitude"
+        longitude = "longitude AS Longitude" if self.use_compiled_db else "Longitude"
+        accuracy = "accuracy AS Accuracy" if self.use_compiled_db else "Accuracy"
+        distance = "distance AS Distance" if self.use_compiled_db else "Distance"
+        sex = "sex AS Sex" if self.use_compiled_db else "Sex"
+        quantity = "quantity AS Quantity" if self.use_compiled_db else "Quantity"
         year_scatter_map_query = f"""
         SELECT
-            Survey_Date, Type, Species, Latitude, Longitude, Accuracy, Distance, Sex, Quantity
+            {survey_date},
+            {survey_type},
+            {species},
+            {latitude},
+            {longitude},
+            {accuracy},
+            {distance},
+            {sex},
+            {quantity}
         FROM
-            salmon
-        WHERE Latitude IS NOT NULL AND Accuracy < 50 AND year = ? {self.additionalFilterForAboveDam}
+            {self.survey_data_table}
+        WHERE {'latitude' if self.use_compiled_db else 'Latitude'} IS NOT NULL AND accuracy < 50 AND year = ? {self.additionalFilterForAboveDamV2}
         """
         return self.getDataFrame(year_scatter_map_query, params=[year])
 
     def getLatestScatterMapData(self):
+        survey_date_column = "DATE(survey_date)" if self.use_compiled_db else "Survey_Date"
+        survey_date = f"{survey_date_column} AS Survey_Date" if self.use_compiled_db else survey_date_column
+        survey_type = "survey_type AS Type" if self.use_compiled_db else "Type"
+        species = "species AS Species" if self.use_compiled_db else "Species"
+        latitude = "latitude AS Latitude" if self.use_compiled_db else "Latitude"
+        longitude = "longitude AS Longitude" if self.use_compiled_db else "Longitude"
+        accuracy = "accuracy AS Accuracy" if self.use_compiled_db else "Accuracy"
+        distance = "distance AS Distance" if self.use_compiled_db else "Distance"
+        sex = "sex AS Sex" if self.use_compiled_db else "Sex"
+        quantity = "quantity AS Quantity" if self.use_compiled_db else "Quantity"
         query = f"""
         SELECT
-            Survey_Date, Type, Species, Latitude, Longitude, Accuracy, Distance, Sex, Quantity
+            {survey_date},
+            {survey_type},
+            {species},
+            {latitude},
+            {longitude},
+            {accuracy},
+            {distance},
+            {sex},
+            {quantity}
         FROM
-            salmon
-        WHERE Latitude IS NOT NULL AND Accuracy < 50 AND year = ? AND Survey_Date = (SELECT MAX(Survey_Date) FROM salmon WHERE year = ?) {self.additionalFilterForAboveDam}
+            {self.survey_data_table}
+        WHERE {'latitude' if self.use_compiled_db else 'Latitude'} IS NOT NULL AND accuracy < 50 AND year = ? AND {survey_date_column} = (SELECT MAX({survey_date_column}) FROM {self.survey_data_table} WHERE year = ?) {self.additionalFilterForAboveDamV2}
         """
         return self.getDataFrame(query, params=[self.surveyYear, self.surveyYear])
 
     def getDataFrame(self, query, params=[]):
         return pd.read_sql(query, self.connection, params=params)
+
+    def _normalize_year_value(self, year):
+        if year is None:
+            return None
+        if isinstance(year, str):
+            text = year.strip()
+            if not text:
+                return None
+            try:
+                return int(text)
+            except ValueError:
+                try:
+                    return int(float(text))
+                except ValueError:
+                    return None
+        return int(year)
+
+    def _memoize_available_years(self):
+        if self._available_years_cache is not None:
+            return self._available_years_cache
+        if not hasattr(self, "connection") or self.connection is None:
+            years = [
+                self._normalize_year_value(y)
+                for y in SALMON_URIS.keys()
+                if self._normalize_year_value(y) is not None
+            ]
+            self.allYears = years
+            self._available_years_cache = years
+            return years
+
+        query = f"SELECT DISTINCT year FROM {self.survey_data_table} WHERE year IS NOT NULL ORDER BY year"
+        years = [
+            self._normalize_year_value(row[0])
+            for row in self.connection.execute(query).fetchall()
+            if self._normalize_year_value(row[0]) is not None
+        ]
+        if not years:
+            years = [
+                self._normalize_year_value(y)
+                for y in SALMON_URIS.keys()
+                if self._normalize_year_value(y) is not None
+            ]
+        self.allYears = years
+        self._available_years_cache = years
+        return years
 
     def _loadSurveyYear(self, year):
         print(f"loading for year: {year}")

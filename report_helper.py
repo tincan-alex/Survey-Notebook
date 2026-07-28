@@ -28,6 +28,11 @@ class ReportHelper:
     def __init__(self, dataHelper: DataHelper):
         self.dataHelper = dataHelper
 
+    def _get_stats_frame(self, year):
+        if self.dataHelper.use_compiled_db:
+            return self.dataHelper.getSurveyStatsV2(year)
+        return self.dataHelper.getSurveyStatsV1(year)
+
     def getFigureAsHTML(self):
         IObytes = io.BytesIO()
         plt.savefig(IObytes, format="png")
@@ -56,7 +61,7 @@ class ReportHelper:
         return fig.to_html(include_plotlyjs="cdn")
 
     def displaySurveyStatsTable(self):
-        tableDf = self.dataHelper.getSurveyStatsV1(self.dataHelper.surveyYear)[
+        tableDf = self.dataHelper.getSurveyStats(self.dataHelper.surveyYear)[
             [
                 "Survey_Date",
                 "live_chum_count",
@@ -126,7 +131,7 @@ class ReportHelper:
 
         traces = []
         for year in years:
-            df = self.dataHelper.getSurveyStatsV1(year)
+            df = self.dataHelper.getSurveyStats(year)
             df["Survey_Date"] = pd.to_datetime(df["Survey_Date"]).dt.strftime("%m/%d")
             df = df.rename(
                 columns={
@@ -216,7 +221,18 @@ class ReportHelper:
         return self.getFigureAsHTML()
 
     def plotSpawning(self, species, sex=""):
-        sexFilter = f"AND Sex = '{sex}'" if sex != "" else ""
+        compiled = self.dataHelper.use_compiled_db
+        table_name = "survey_data" if compiled else "salmon"
+        species_col = "species" if compiled else "Species"
+        survey_type_col = "survey_type" if compiled else "Type"
+        sex_col = "sex" if compiled else "Sex"
+        spawned_col = "spawned" if compiled else "Spawned"
+        species_value = str(species).strip().lower()
+        sex_filter = (
+            f"AND LOWER(COALESCE({sex_col}, '')) = '{str(sex).strip().lower()}'"
+            if sex != ""
+            else ""
+        )
         colors = {
             "Partially Spawned": "yellow",
             "Spawned": "green",
@@ -225,12 +241,12 @@ class ReportHelper:
         }
         query = f"""
         SELECT
-            100 * CAST(COUNT(CASE WHEN Species = '{species}' {sexFilter} AND Type = 'Dead' AND Spawned = 'Spawned' THEN _id END) AS float) / CAST(COUNT(CASE WHEN Species = '{species}' {sexFilter} AND Type = 'Dead' THEN _id END) AS float) AS Spawned,
-            100 * CAST(COUNT(CASE WHEN Species = '{species}' {sexFilter} AND Type = 'Dead' AND Spawned = 'Unspawned' THEN _id END) AS float) / CAST(COUNT(CASE WHEN Species = '{species}' {sexFilter} AND Type = 'Dead' THEN _id END) AS float) AS Unspawned,
-            100 * CAST(COUNT(CASE WHEN Species = '{species}' {sexFilter} AND Type = 'Dead' AND Spawned in ('Partially_spawned', 'Partially spawned') THEN _id END) AS float) / CAST(COUNT(CASE WHEN Species = '{species}' {sexFilter} AND Type = 'Dead' THEN _id END) AS float) AS [Partially Spawned],
-            100 * CAST(COUNT(CASE WHEN Species = '{species}' {sexFilter} AND Type = 'Dead' AND Spawned = 'Unknown' THEN _id END) AS float) / CAST(COUNT(CASE WHEN Species = '{species}' {sexFilter} AND Type = 'Dead' THEN _id END) AS float) AS Unknown
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' {sex_filter} AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND LOWER(COALESCE({spawned_col}, '')) = 'spawned' THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' {sex_filter} AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS Spawned,
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' {sex_filter} AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND LOWER(COALESCE({spawned_col}, '')) = 'unspawned' THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' {sex_filter} AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS Unspawned,
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' {sex_filter} AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND LOWER(COALESCE({spawned_col}, '')) IN ('partially spawned', 'partially_spawned', 'ps', 'p') THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' {sex_filter} AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS [Partially Spawned],
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' {sex_filter} AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND LOWER(COALESCE({spawned_col}, '')) IN ('unknown', 'u', 'unk', 'uk', '') THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' {sex_filter} AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS Unknown
         FROM
-            salmon
+            {table_name}
         WHERE year = {self.dataHelper.surveyYear}
         """
         return self.plotBarH(
@@ -275,15 +291,23 @@ class ReportHelper:
 
         for year in years:
             for species, sex, row, col in species_configs:
-                sex_filter = f"AND Sex = '{sex}'" if sex else ""
+                sex_filter = f"AND LOWER(COALESCE({'sex' if self.dataHelper.use_compiled_db else 'Sex'}, '')) = '{sex.lower()}'" if sex else ""
                 query = f"""
                     SELECT
-                        COUNT(CASE WHEN Spawned = 'Spawned' THEN _id END) AS Spawned,
-                        COUNT(CASE WHEN Spawned = 'Unspawned' THEN _id END) AS Unspawned,
-                        COUNT(CASE WHEN Spawned IN ('Partially_spawned', 'Partially spawned') THEN _id END) AS "Partially Spawned",
-                        COUNT(CASE WHEN Spawned = 'Unknown' THEN _id END) AS Unknown
+                        COUNT(CASE WHEN LOWER(COALESCE(spawned, '')) = 'spawned' THEN 1 END) AS Spawned,
+                        COUNT(CASE WHEN LOWER(COALESCE(spawned, '')) = 'unspawned' THEN 1 END) AS Unspawned,
+                        COUNT(CASE WHEN LOWER(COALESCE(spawned, '')) = 'partially spawned' THEN 1 END) AS "Partially Spawned",
+                        COUNT(CASE WHEN LOWER(COALESCE(spawned, '')) IN ('unknown', '') THEN 1 END) AS Unknown
+                    FROM survey_data
+                    WHERE year = {year} AND LOWER(COALESCE(species, '')) = '{species.lower()}' AND LOWER(COALESCE(survey_type, '')) = 'dead' {sex_filter}
+                """ if self.dataHelper.use_compiled_db else f"""
+                    SELECT
+                        COUNT(CASE WHEN LOWER(COALESCE(Spawned, '')) = 'spawned' THEN 1 END) AS Spawned,
+                        COUNT(CASE WHEN LOWER(COALESCE(Spawned, '')) = 'unspawned' THEN 1 END) AS Unspawned,
+                        COUNT(CASE WHEN LOWER(COALESCE(Spawned, '')) IN ('partially spawned', 'partially_spawned', 'ps', 'p') THEN 1 END) AS "Partially Spawned",
+                        COUNT(CASE WHEN LOWER(COALESCE(Spawned, '')) IN ('unknown', 'u', 'unk', 'uk', '') THEN 1 END) AS Unknown
                     FROM salmon
-                    WHERE year = {year} AND Species = '{species}' AND Type = 'Dead' {sex_filter}
+                    WHERE year = {year} AND LOWER(COALESCE(Species, '')) = '{species.lower()}' AND LOWER(COALESCE(Type, '')) = 'dead' {sex_filter}
                 """
                 df = self.dataHelper.getDataFrame(query)
                 if df.empty:
@@ -374,6 +398,13 @@ class ReportHelper:
         return fig.to_html(include_plotlyjs="cdn", full_html=False)
 
     def plotPredation(self, species):
+        compiled = self.dataHelper.use_compiled_db
+        table_name = "survey_data" if compiled else "salmon"
+        species_col = "species" if compiled else "Species"
+        survey_type_col = "survey_type" if compiled else "Type"
+        predation_col = "predation" if compiled else "Predation"
+        carcass_state_col = "carcass_state" if compiled else "Predation"
+        species_value = str(species).strip().lower()
         colors = {
             "Eye loss only": "teal",
             "No damage": "pink",
@@ -382,12 +413,12 @@ class ReportHelper:
         }
         query = f"""
         SELECT
-            100 * CAST(COUNT(CASE WHEN Species = '{species}' AND Type = 'Dead' AND Predation = 'Eye_loss_only' THEN _id END) AS float) / CAST(COUNT(CASE WHEN Species = '{species}' AND Type = 'Dead' THEN _id END) AS float) AS [Eye loss only],
-            100 * CAST(COUNT(CASE WHEN Species = '{species}' AND Type = 'Dead' AND Predation = 'Predation' THEN _id END) AS float) / CAST(COUNT(CASE WHEN Species = '{species}' AND Type = 'Dead' THEN _id END) AS float) AS Predation,
-            100 * CAST(COUNT(CASE WHEN Species = '{species}' AND Type = 'Dead' AND Predation = 'No_damage' THEN _id END) AS float) / CAST(COUNT(CASE WHEN Species = '{species}' AND Type = 'Dead' THEN _id END) AS float) AS [No damage],
-            100 * CAST(COUNT(CASE WHEN Species = '{species}' AND Type = 'Dead' AND Predation = 'Unknown' THEN _id END) AS float) / CAST(COUNT(CASE WHEN Species = '{species}' AND Type = 'Dead' THEN _id END) AS float) AS Unknown
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND LOWER(COALESCE({carcass_state_col}, '')) IN ('eye loss', 'eye loss only') THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS [Eye loss only],
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND LOWER(COALESCE({predation_col}, '')) IN ('predated', 'predation', 'yes', 'y', 'partial', 'n/p', 'n/y', 'both', 's/p', 'p/s', 's/y', 'y/p', 'scavenged', 's', 'sc', 's/n', 'y/n') THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS Predation,
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND (LOWER(COALESCE({carcass_state_col}, '')) IN ('no damage', 'no', 'n') OR LOWER(COALESCE({predation_col}, '')) IN ('no predation', 'no damage', 'no', 'n')) THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS [No damage],
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND (LOWER(COALESCE({predation_col}, '')) IN ('unknown', 'u', 'unk', 'uk', '') OR LOWER(COALESCE({carcass_state_col}, '')) IN ('unknown', 'u', 'unk', 'uk', '')) THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS Unknown
         FROM
-            salmon
+            {table_name}
         WHERE year = {self.dataHelper.surveyYear}
         """
         return self.plotBarH(query, f"{species} Predation", colors)
@@ -417,19 +448,27 @@ class ReportHelper:
 
         legend_shown = {f"{c}-{year}": False for c in categories for year in years}
         traces = []
+        query = f"""
+            SELECT
+                COUNT(CASE WHEN LOWER(COALESCE(carcass_state, '')) = 'eye loss' THEN 1 END) AS "Eye loss only",
+                COUNT(CASE WHEN LOWER(COALESCE(predation, '')) IN ('predated', 'both', 'scavenged') THEN 1 END) AS Predation,
+                COUNT(CASE WHEN LOWER(COALESCE(carcass_state, '')) = 'no damage' THEN 1 END) AS "No damage",
+                COUNT(CASE WHEN LOWER(COALESCE(predation, '')) IN ('unknown', '') OR LOWER(COALESCE(carcass_state, '')) IN ('unknown', '') THEN 1 END) AS Unknown
+            FROM {self.dataHelper.survey_data_table}
+            WHERE year = ? AND LOWER(COALESCE(species, '')) = ? AND LOWER(COALESCE(survey_type, '')) = 'dead'
+        """ if self.dataHelper.use_compiled_db else f"""
+            SELECT
+                COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('eye loss', 'eye loss only') THEN 1 END) AS "Eye loss only",
+                COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('predated', 'predation', 'yes', 'y', 'partial', 'n/p', 'n/y', 'both', 's/p', 'p/s', 's/y', 'y/p', 'scavenged', 's', 'sc', 's/n', 'y/n') THEN 1 END) AS Predation,
+                COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('no damage', 'no predation', 'no', 'n') THEN 1 END) AS "No damage",
+                COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('unknown', 'u', 'unk', 'uk', '') THEN 1 END) AS Unknown
+            FROM {self.dataHelper.survey_data_table}
+            WHERE year = ? AND LOWER(COALESCE(Species, '')) = ? AND LOWER(COALESCE(Type, '')) = 'dead'
+        """
 
         for year in years:
             for species, row, col in species_configs:
-                query = f"""
-                    SELECT
-                        COUNT(CASE WHEN Predation in ('Eye_loss_only', 'Eye loss') THEN _id END) AS "Eye loss only",
-                        COUNT(CASE WHEN Predation in ('Yes', 'Predation') THEN _id END) AS Predation,
-                        COUNT(CASE WHEN Predation in ('No', 'No_damage') THEN _id END) AS "No damage",
-                        COUNT(CASE WHEN Predation in ('', 'Unknown') THEN _id END) AS Unknown
-                    FROM salmon
-                    WHERE year = {year} AND Species = '{species}' AND Type = 'Dead'
-                """
-                df = self.dataHelper.getDataFrame(query)
+                df = self.dataHelper.getDataFrame(query, [year, species.lower()])
                 if df.empty:
                     counts = {c: 0 for c in categories}
                 else:
@@ -508,13 +547,17 @@ class ReportHelper:
         return fig.to_html(include_plotlyjs="cdn", full_html=False)
 
     def plotSeries(self, year):
-        statsDf = self.dataHelper.getSurveyStatsV1(year)
-        statsDf["Survey_Date"] = statsDf["Survey_Date"].apply(
-            lambda x: datetime.strptime(
-                date.fromisoformat(x).strftime("%m-%d"), "%m-%d"
-            )
-        )
-        plt.plot("Survey_Date", "total_salmon_count", data=statsDf, label=year)
+        statsDf = self.dataHelper.getSurveyStats(year)
+        if statsDf.empty:
+            return
+        statsDf = statsDf.copy()
+        statsDf["Survey_Date_dt"] = pd.to_datetime(statsDf["Survey_Date"], errors="coerce")
+        statsDf = statsDf.dropna(subset=["Survey_Date_dt"])
+        if statsDf.empty:
+            return
+        statsDf["Survey_Date"] = statsDf["Survey_Date_dt"].dt.strftime("%m-%d")
+        statsDf["Survey_Date"] = pd.to_datetime(statsDf["Survey_Date"], format="%m-%d")
+        plt.plot("Survey_Date", "total_salmon_count", data=statsDf, label=str(year))
 
     def getYearByYearCountPlot(self):
         fig, ax = plt.subplots()
@@ -534,7 +577,7 @@ class ReportHelper:
         traces = []
         ycol = "total_salmon_count"
         for year in years:
-            df = self.dataHelper.getSurveyStatsV1(str(year))
+            df = self.dataHelper.getSurveyStats(str(year))
             if df.empty:
                 continue
             df["Survey_Date_dt"] = pd.to_datetime(df["Survey_Date"])
@@ -666,6 +709,8 @@ class ReportHelper:
         color_dict = {"Live": "teal", "Redd": "red", "Dead": "black"}
         types = list(color_dict.keys())
         df = self.dataHelper.getLatestScatterMapData()
+        if df.empty:
+            return ""
         latestSurvey = df.iloc[0]["Survey_Date"]
 
         df["marker_color"] = df["Type"].map(color_dict)
