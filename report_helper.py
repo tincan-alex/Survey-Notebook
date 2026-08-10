@@ -413,9 +413,9 @@ class ReportHelper:
         }
         query = f"""
         SELECT
-            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND LOWER(COALESCE({carcass_state_col}, '')) IN ('eye loss', 'eye loss only') THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS [Eye loss only],
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND LOWER(COALESCE({carcass_state_col}, '')) IN ('eye loss', 'eye loss only', 'eye_loss_only') THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS [Eye loss only],
             100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND LOWER(COALESCE({predation_col}, '')) IN ('predated', 'predation', 'yes', 'y', 'partial', 'n/p', 'n/y', 'both', 's/p', 'p/s', 's/y', 'y/p', 'scavenged', 's', 'sc', 's/n', 'y/n') THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS Predation,
-            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND (LOWER(COALESCE({carcass_state_col}, '')) IN ('no damage', 'no', 'n') OR LOWER(COALESCE({predation_col}, '')) IN ('no predation', 'no damage', 'no', 'n')) THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS [No damage],
+            100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND (LOWER(COALESCE({carcass_state_col}, '')) IN ('no damage', 'no', 'n', 'no_damage') OR LOWER(COALESCE({predation_col}, '')) IN ('no predation', 'no damage', 'no', 'n')) THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS [No damage],
             100 * CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' AND (LOWER(COALESCE({predation_col}, '')) IN ('unknown', 'u', 'unk', 'uk', '') OR LOWER(COALESCE({carcass_state_col}, '')) IN ('unknown', 'u', 'unk', 'uk', '')) THEN 1 END) AS float) / CAST(COUNT(CASE WHEN LOWER(COALESCE({species_col}, '')) = '{species_value}' AND LOWER(COALESCE({survey_type_col}, '')) = 'dead' THEN 1 END) AS float) AS Unknown
         FROM
             {table_name}
@@ -458,9 +458,9 @@ class ReportHelper:
             WHERE year = ? AND LOWER(COALESCE(species, '')) = ? AND LOWER(COALESCE(survey_type, '')) = 'dead'
         """ if self.dataHelper.use_compiled_db else f"""
             SELECT
-                COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('eye loss', 'eye loss only') THEN 1 END) AS "Eye loss only",
+                COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('eye loss', 'eye loss only', 'eye_loss_only') THEN 1 END) AS "Eye loss only",
                 COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('predated', 'predation', 'yes', 'y', 'partial', 'n/p', 'n/y', 'both', 's/p', 'p/s', 's/y', 'y/p', 'scavenged', 's', 'sc', 's/n', 'y/n') THEN 1 END) AS Predation,
-                COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('no damage', 'no predation', 'no', 'n') THEN 1 END) AS "No damage",
+                COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('no damage', 'no predation', 'no', 'n', 'no_damage') THEN 1 END) AS "No damage",
                 COUNT(CASE WHEN LOWER(COALESCE(Predation, '')) IN ('unknown', 'u', 'unk', 'uk', '') THEN 1 END) AS Unknown
             FROM {self.dataHelper.survey_data_table}
             WHERE year = ? AND LOWER(COALESCE(Species, '')) = ? AND LOWER(COALESCE(Type, '')) = 'dead'
@@ -620,13 +620,23 @@ class ReportHelper:
         color_dict = {"Live": "teal", "Redd": "red", "Dead": "black"}
         types = list(color_dict.keys())
         title_position = {"x": 0.5, "y": 0.96}
+        legend_shown = {f"{t}-{year}": False for t in types for year in years}
+        years_present = []
 
         for year in years:
             df = self.dataHelper.getYearScatterMapData(year)
+            if df.empty:
+                continue
+            years_present.append(year)
             df["marker_color"] = df["Type"].map(color_dict)
             for t in types:
                 color = color_dict[t]
                 subset = df[df["Type"] == t]
+                showLegend = False
+                legend_key = f"{t}-{year}"
+                if not legend_shown[legend_key]:
+                    showLegend = True
+                    legend_shown[legend_key] = True
                 traces.append(
                     go.Scattermapbox(
                         lat=subset["Latitude"],
@@ -648,19 +658,25 @@ class ReportHelper:
                             "Accuracy: %{customdata[4]}<extra></extra>"
                         ),
                         visible=(year == default_year),
-                        showlegend=(year == default_year),
+                        showlegend=showLegend,
                     )
                 )
 
         buttons = []
-        for year in years:
-            visible = [(y == year) for y in years]
+        traces_per_year = len(types)
+
+        for year in years_present:
+            visible = [False] * len(traces)
+            start = years_present.index(year) * traces_per_year
+            for i in range(start, start + traces_per_year):
+                visible[i] = True
+
             buttons.append(
                 dict(
-                    label=year,
+                    label=str(year),
                     method="update",
                     args=[
-                        {"visible": visible, "showlegend": True},
+                        {"visible": visible},
                         {
                             "title": {
                                 "text": f"{year} Fish Scatter Map",
@@ -681,7 +697,7 @@ class ReportHelper:
             updatemenus=[
                 {
                     **dict(
-                        active=years.index(default_year),
+                        active=years_present.index(default_year),
                         buttons=buttons,
                         pad={"r": 10, "t": 10},
                         x=0,

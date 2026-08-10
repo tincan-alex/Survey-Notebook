@@ -111,9 +111,10 @@ class DataHelper:
         url = "https://raw.githubusercontent.com/tincan-alex/salmon_data_snapshot/main/survey_data.db"
         response = requests.get(url, timeout=60)
         response.raise_for_status()
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as handle:
+        with open("survey_data.db", "wb") as handle:
             handle.write(response.content)
             db_path = Path(handle.name)
+        self.db_path = db_path
         self.connection = sqlite3.connect(db_path)
         self._memoize_available_years()
 
